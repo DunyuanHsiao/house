@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>台北法拍屋追蹤</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f6f6f4;
+  --surface-1: #fcfcfb;
+  --border: #e3e2de;
+  --grid: #ecebe7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #85847f;
+  --accent: #2a78d6;
+  --accent-soft: #e6effa;
+  --good: #1a7f37;     --good-bg: #e5f4e9;
+  --warn: #9a6700;     --warn-bg: #fdf3d8;
+  --crit: #c4302b;     --crit-bg: #fbe7e6;
+  --neutral-bg: #eeeeeb;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121211; --surface-1: #1a1a19; --border: #2e2e2c; --grid: #262624;
+    --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8d8c85;
+    --accent: #3987e5; --accent-soft: #1d2b3d;
+    --good: #5cc27a; --good-bg: #17301f; --warn: #e0b04a; --warn-bg: #352a12;
+    --crit: #f07a75; --crit-bg: #3b1c1b; --neutral-bg: #262624;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211; --surface-1: #1a1a19; --border: #2e2e2c; --grid: #262624;
+  --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8d8c85;
+  --accent: #3987e5; --accent-soft: #1d2b3d;
+  --good: #5cc27a; --good-bg: #17301f; --warn: #e0b04a; --warn-bg: #352a12;
+  --crit: #f07a75; --crit-bg: #3b1c1b; --neutral-bg: #262624;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text-primary);
+  font: 14px/1.5 system-ui, -apple-system, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+}
+.wrap { max-width: 1280px; margin: 0 auto; padding: 20px 16px 48px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; justify-content: space-between; margin-bottom: 16px; }
+h1 { font-size: 22px; margin: 0; }
+.sub { color: var(--text-secondary); font-size: 13px; }
+button, select, input {
+  font: inherit; color: var(--text-primary); background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
+}
+button { cursor: pointer; }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button:disabled { opacity: .6; cursor: wait; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.tile .label { color: var(--text-secondary); font-size: 13px; }
+.tile .value { font-size: 28px; font-weight: 600; margin-top: 4px; }
+.tile .hint { color: var(--text-muted); font-size: 12px; }
+.chart-card { margin-bottom: 12px; }
+.chart-card h2, .table-card h2 { font-size: 15px; margin: 0 0 8px; }
+#chart { position: relative; }
+#chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+#chart text { fill: var(--text-secondary); font-size: 12px; }
+.tooltip {
+  position: absolute; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 10px; font-size: 12px; box-shadow: 0 4px 12px rgba(0,0,0,.12);
+  white-space: nowrap; display: none; z-index: 5;
+}
+.tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
+.tabs button { border-radius: 999px; }
+.tabs button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; }
+.filters label { display: flex; align-items: center; gap: 4px; color: var(--text-secondary); font-size: 13px; }
+.filters input[type=search] { min-width: 200px; }
+.filters input[type=number] { width: 110px; }
+.count { color: var(--text-secondary); font-size: 13px; margin-left: auto; }
+.table-scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 8px 8px; border-bottom: 1px solid var(--grid); text-align: left; vertical-align: top; }
+th { color: var(--text-secondary); font-weight: 500; white-space: nowrap; cursor: pointer; user-select: none; position: sticky; top: 0; background: var(--surface-1); }
+th.sorted::after { content: " ▾"; }
+th.sorted.asc::after { content: " ▴"; }
+td.nowrap { white-space: nowrap; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.row { cursor: pointer; }
+tr.row:hover td { background: var(--accent-soft); }
+.addr { font-weight: 500; }
+.case { color: var(--text-muted); font-size: 12px; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; white-space: nowrap; }
+.b-good { background: var(--good-bg); color: var(--good); }
+.b-warn { background: var(--warn-bg); color: var(--warn); }
+.b-crit { background: var(--crit-bg); color: var(--crit); }
+.b-neutral { background: var(--neutral-bg); color: var(--text-secondary); }
+.b-new { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.drop { color: var(--good); }
+.links a { color: var(--accent); text-decoration: none; margin-right: 8px; white-space: nowrap; }
+.links a:hover { text-decoration: underline; }
+tr.detail td { background: var(--bg); }
+.history { display: flex; gap: 24px; flex-wrap: wrap; }
+.history table { width: auto; }
+.empty { text-align: center; color: var(--text-muted); padding: 32px; }
+.toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text-primary); color: var(--bg); padding: 8px 16px; border-radius: 8px; display: none; }
+@media (max-width: 640px) { .tile .value { font-size: 22px; } .filters input[type=search] { min-width: 0; width: 100%; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>台北法拍屋追蹤</h1>
+      <div class="sub">資料來源：司法院法拍屋查詢系統（臺北地院、士林地院）· <span id="lastRun">載入中…</span></div>
+    </div>
+    <button class="primary" id="refreshBtn">立即更新</button>
+  </header>
+
+  <section class="tiles">
+    <div class="card tile"><div class="label">拍賣中標的</div><div class="value" id="kActive">–</div><div class="hint" id="kActiveHint"></div></div>
+    <div class="card tile"><div class="label">近 7 天新上架</div><div class="value" id="kNew">–</div><div class="hint">依本系統首次抓到的時間</div></div>
+    <div class="card tile"><div class="label">14 天內開拍</div><div class="value" id="kSoon">–</div><div class="hint" id="kSoonHint"></div></div>
+    <div class="card tile"><div class="label">底價中位數單價</div><div class="value" id="kUnit">–</div><div class="hint">萬/坪，僅計權利範圍全部者</div></div>
+  </section>
+
+  <section class="card chart-card">
+    <h2>各行政區拍賣中標的數</h2>
+    <div id="chart"><div class="tooltip" id="tip"></div></div>
+  </section>
+
+  <section class="card table-card">
+    <div class="tabs" id="tabs">
+      <button data-tab="active" class="on">拍賣中</button>
+      <button data-tab="special">應買公告</button>
+      <button data-tab="sold">已拍定</button>
+      <button data-tab="ended">已結束 / 撤回</button>
+      <button data-tab="all">全部</button>
+    </div>
+    <div class="filters">
+      <input type="search" id="fText" placeholder="搜尋地址、案號、段名">
+      <label>行政區 <select id="fDistrict"><option value="">全部</option></select></label>
+      <label>拍次 <select id="fSaleno"><option value="">不限</option><option value="1">第1拍</option><option value="2">第2拍</option><option value="3">第3拍</option><option value="4+">第4拍以上</option></select></label>
+      <label>點交 <select id="fCheck"><option value="">不限</option><option>點交</option><option>不點交</option></select></label>
+      <label>權利 <select id="fRange"><option value="">不限</option><option>全部</option><option>持分</option></select></label>
+      <label>底價上限 <input type="number" id="fMax" placeholder="萬元" min="0"></label>
+      <label><input type="checkbox" id="fNew"> 只看新上架</label>
+      <label><input type="checkbox" id="fStopped"> 含停拍</label>
+      <span class="count" id="count"></span>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead><tr id="thead"></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const PING = 0.3025;
+const DAY = 86400000;
+let LOTS = [], PDF_URL = '', PIC_URL = '';
+let tab = 'active', sortKey = 'saledate', sortAsc = true;
+const openRows = new Set();
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const wan = n => n == null ? '–' : (n / 1e4).toLocaleString('zh-TW', {maximumFractionDigits: n < 1e6 ? 1 : 0});
+const ping = m2 => m2 * PING;
+const unitPrice = l => (l.rrange === '全部' && l.area_m2 > 0) ? l.min_price / 1e4 / ping(l.area_m2) : null;
+const isNew = l => Date.now() - new Date(l.first_seen) < 7 * DAY;
+const isFirstRun = () => new Set(LOTS.map(l => l.first_seen)).size <= 1;
+
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 3000); }
+
+const NO_SERVER = '無法連線到伺服器：請在終端機執行 python3 server.py，再用瀏覽器開啟 http://localhost:8000（不要直接開啟 index.html 檔案）';
+
+async function api(path, opts) {
+  if (location.protocol === 'file:') throw new Error(NO_SERVER);
+  let r;
+  try { r = await fetch(path, opts); } catch { throw new Error(NO_SERVER); }
+  if (!r.ok) throw new Error(`伺服器錯誤 ${r.status}`);
+  return r.json();
+}
+
+function showError(msg) {
+  $('lastRun').textContent = msg;
+  $('lastRun').style.color = 'var(--crit)';
+}
+
+async function load() {
+  let d, s;
+  try {
+    [d, s] = await Promise.all([api('/api/lots'), api('/api/status')]);
+  } catch (e) { showError(e.message); return; }
+  $('lastRun').style.color = '';
+  LOTS = d.lots; PDF_URL = d.pdf_url; PIC_URL = d.pic_url;
+  const ok = s.last_success, last = s.last_run;
+  let txt = ok ? `最後更新 ${ok.finished.replace('T', ' ')}` : '尚未更新';
+  if (last && last.error) txt += ` · 最近一次更新失敗`;
+  if (s.running) txt += ' · 更新中…';
+  $('lastRun').textContent = txt;
+  const dists = [...new Set(LOTS.map(l => l.district))].sort();
+  const sel = $('fDistrict'), cur = sel.value;
+  sel.innerHTML = '<option value="">全部</option>' + dists.map(d => `<option>${esc(d)}</option>`).join('');
+  sel.value = cur;
+  renderTiles(); renderChart(); renderTable();
+}
+
+function renderTiles() {
+  const live = LOTS.filter(l => l.status === 'active' || l.status === 'special');
+  $('kActive').textContent = live.length.toLocaleString();
+  $('kActiveHint').textContent = `一般程序 ${live.filter(l => l.status === 'active').length} · 應買公告 ${live.filter(l => l.status === 'special').length}`;
+  $('kNew').textContent = isFirstRun() ? '–' : live.filter(isNew).length;
+  const today = new Date(new Date().toDateString());
+  const soon = live.filter(l => { const d = new Date(l.saledate); return d >= today && d - today <= 14 * DAY; });
+  $('kSoon').textContent = soon.length;
+  $('kSoonHint').textContent = soon.length ? `最近一場 ${soon.map(l => l.saledate).sort()[0]}` : '';
+  const ups = live.map(unitPrice).filter(v => v != null).sort((a, b) => a - b);
+  $('kUnit').textContent = ups.length ? ups[Math.floor(ups.length / 2)].toFixed(1) : '–';
+}
+
+function renderChart() {
+  const live = LOTS.filter(l => l.status === 'active' || l.status === 'special');
+  const counts = {};
+  live.forEach(l => counts[l.district] = (counts[l.district] || 0) + 1);
+  const data = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const box = $('chart');
+  box.querySelector('svg')?.remove();
+  if (!data.length) return;
+  const W = Math.max(box.clientWidth, 300), rowH = 26, labelW = 64, padR = 36;
+  const H = data.length * rowH;
+  const max = Math.max(...data.map(d => d[1]));
+  const x = v => (W - labelW - padR) * v / max;
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', '各行政區拍賣中標的數：' + data.map(d => `${d[0]} ${d[1]}`).join('、'));
+  svg.innerHTML = data.map(([name, n], i) => {
+    const y = i * rowH, w = Math.max(x(n), 2), bh = rowH - 8;
+    return `<g class="bar" data-name="${esc(name)}" data-n="${n}">
+      <rect x="0" y="${y}" width="${W}" height="${rowH}" fill="transparent"/>
+      <text x="${labelW - 8}" y="${y + rowH / 2 + 4}" text-anchor="end">${esc(name)}</text>
+      <path d="M${labelW},${y + 4} h${w - 4} a4,4 0 0 1 4,4 v${bh - 8} a4,4 0 0 1 -4,4 h${-(w - 4)} z" fill="var(--accent)"/>
+      ${i < 3 ? `<text x="${labelW + w + 6}" y="${y + rowH / 2 + 4}">${n}</text>` : ''}
+    </g>`;
+  }).join('');
+  box.appendChild(svg);
+  const tip = $('tip');
+  svg.querySelectorAll('.bar').forEach(g => {
+    g.addEventListener('mousemove', e => {
+      const r = box.getBoundingClientRect();
+      tip.innerHTML = `<b>${esc(g.dataset.name)}</b>　${g.dataset.n} 件`;
+      tip.style.display = 'block';
+      tip.style.left = Math.min(e.clientX - r.left + 12, r.width - 120) + 'px';
+      tip.style.top = (e.clientY - r.top + 12) + 'px';
+      g.querySelector('path').style.opacity = .8;
+    });
+    g.addEventListener('mouseleave', () => { tip.style.display = 'none'; g.querySelector('path').style.opacity = 1; });
+    g.addEventListener('click', () => { $('fDistrict').value = g.dataset.name; renderTable(); });
+  });
+}
+
+const STATUS = {
+  active: ['拍賣中', 'b-good'], special: ['應買公告', 'b-warn'], stopped: ['停拍', 'b-crit'],
+  sold: ['已拍定', 'b-neutral'], ended: ['已結束', 'b-neutral'],
+};
+
+function columns() {
+  const base = [
+    {k: 'saledate', t: {sold: '拍定日', special: '公告日'}[tab] || '拍賣日', nowrap: true, v: l => tab === 'sold' ? (l.sold_date || l.saledate) : l.saledate},
+    {k: 'district', t: '行政區', v: l => l.district},
+    {k: 'addr', t: '地址 / 案號', v: l => l.addresses[0] || '', html: l => {
+      const more = l.addresses.length > 1 ? ` <span class="case">等 ${l.addresses.length} 筆</span>` : '';
+      const nb = (!isFirstRun() && isNew(l) && (l.status === 'active' || l.status === 'special')) ? ' <span class="badge b-new">新</span>' : '';
+      return `<div class="addr">${esc(l.addresses[0] || l.sec + '段')}${more}${nb}</div><div class="case">${esc(l.crtnm.replace('臺灣', ''))} ${esc(l.crm)} ${esc(l.dpt)}股</div>`;
+    }},
+    {k: 'saleno', t: '拍次', nowrap: true, v: l => l.status === 'special' ? 99 : +l.saleno, html: l => esc(l.salenostr)},
+    {k: 'min_price', t: '總底價(萬)', num: true, v: l => l.min_price, html: l => wan(l.min_price)},
+  ];
+  if (tab === 'sold' || tab === 'all') base.push(
+    {k: 'sold_price', t: '拍定價(萬)', num: true, v: l => l.sold_price, html: l => wan(l.sold_price)},
+    {k: 'premium', t: '溢價', num: true, v: l => l.sold_price && l.min_price ? l.sold_price / l.min_price - 1 : null,
+      html: l => l.sold_price && l.min_price ? ((l.sold_price / l.min_price - 1) * 100).toFixed(1) + '%' : '–'},
+  );
+  if (tab !== 'sold') base.push(
+    {k: 'drop', t: '較首拍', num: true, v: l => l.first_price && l.min_price < l.first_price ? l.min_price / l.first_price - 1 : 0,
+      html: l => l.first_price && l.min_price < l.first_price ? `<span class="drop">↓${((1 - l.min_price / l.first_price) * 100).toFixed(0)}%</span>` : '–'},
+  );
+  base.push(
+    {k: 'area', t: '坪數', num: true, v: l => l.area_m2, html: l => ping(l.area_m2).toFixed(1)},
+    {k: 'unit', t: '單價(萬/坪)', num: true, v: l => unitPrice(l), html: l => { const u = unitPrice(l); return u == null ? '–' : u.toFixed(1); }},
+    {k: 'checkyn', t: '點交', v: l => l.checkyn, html: l => `<span class="badge ${l.checkyn === '點交' ? 'b-good' : 'b-neutral'}">${esc(l.checkyn)}</span>`},
+    {k: 'rrange', t: '權利', v: l => l.rrange, html: l => l.rrange === '持分' ? '<span class="badge b-warn">持分</span>' : '全部'},
+    {k: 'status', t: '狀態', v: l => l.status, html: l => { const [t, c] = STATUS[l.status] || [l.status, 'b-neutral']; return `<span class="badge ${c}">${t}</span>`; }},
+    {k: 'links', t: '連結', sortless: true, html: l => `<span class="links">
+      ${l.filenm ? `<a href="${PDF_URL}${encodeURIComponent(l.filenm)}" target="_blank" rel="noopener">公告</a>` : ''}
+      ${l.pic_cnt ? `<a href="${PIC_URL}${encodeURIComponent(l.para)}" target="_blank" rel="noopener">照片${l.pic_cnt}</a>` : ''}
+      ${l.addresses[0] ? `<a href="https://www.google.com/maps/search/${encodeURIComponent(l.addresses[0])}" target="_blank" rel="noopener">地圖</a>` : ''}
+    </span>`},
+  );
+  return base;
+}
+
+function filtered() {
+  const text = $('fText').value.trim().toLowerCase();
+  const dist = $('fDistrict').value, saleno = $('fSaleno').value, chk = $('fCheck').value, rr = $('fRange').value;
+  const max = parseFloat($('fMax').value), onlyNew = $('fNew').checked, stopped = $('fStopped').checked;
+  return LOTS.filter(l => {
+    if (tab === 'active' && !(l.status === 'active' || (stopped && l.status === 'stopped'))) return false;
+    if (tab === 'special' && l.status !== 'special') return false;
+    if (tab === 'sold' && l.status !== 'sold') return false;
+    if (tab === 'ended' && l.status !== 'ended' && l.status !== 'stopped') return false;
+    if (dist && l.district !== dist) return false;
+    if (saleno === '4+' && !(+l.saleno >= 4)) return false;
+    if (/^\d$/.test(saleno) && (l.saleno !== saleno || l.status === 'special')) return false;
+    if (chk && l.checkyn !== chk) return false;
+    if (rr && l.rrange !== rr) return false;
+    if (!isNaN(max) && l.min_price > max * 1e4) return false;
+    if (onlyNew && !isNew(l)) return false;
+    if (text && !(l.addresses.join(' ') + l.crm + l.sec + l.district).toLowerCase().includes(text)) return false;
+    return true;
+  });
+}
+
+function renderTable() {
+  const cols = columns();
+  if (!cols.some(c => c.k === sortKey)) { sortKey = 'saledate'; sortAsc = tab === 'active'; }
+  $('thead').innerHTML = cols.map(c =>
+    `<th data-k="${c.k}" class="${c.num ? 'num' : ''} ${c.k === sortKey ? 'sorted' + (sortAsc ? ' asc' : '') : ''}">${c.t}</th>`).join('');
+  const col = cols.find(c => c.k === sortKey);
+  const list = filtered().sort((a, b) => {
+    let x = col.v(a), y = col.v(b);
+    if (x == null) return 1; if (y == null) return -1;
+    return (x < y ? -1 : x > y ? 1 : 0) * (sortAsc ? 1 : -1);
+  });
+  $('count').textContent = `共 ${list.length} 件`;
+  if (!list.length) { $('tbody').innerHTML = `<tr><td colspan="${cols.length}" class="empty">沒有符合條件的標的</td></tr>`; return; }
+  $('tbody').innerHTML = list.map(l =>
+    `<tr class="row" data-key="${l.lot_key}">${cols.map(c => `<td class="${c.num ? 'num' : ''}${c.nowrap ? ' nowrap' : ''}">${c.html ? c.html(l) : esc(c.v(l))}</td>`).join('')}</tr>` +
+    (openRows.has(l.lot_key) ? `<tr class="detail" data-for="${l.lot_key}"><td colspan="${cols.length}">載入中…</td></tr>` : '')
+  ).join('');
+  openRows.forEach(k => loadHistory(k));
+}
+
+async function loadHistory(key) {
+  const row = document.querySelector(`tr.detail[data-for="${key}"] td`);
+  if (!row) return;
+  const lot = LOTS.find(l => l.lot_key === key);
+  let h;
+  try { h = await api('/api/history?key=' + key); } catch (e) { row.textContent = e.message; return; }
+  row.innerHTML = `<div class="history">
+    <div><b>拍賣歷程</b>
+      <table><tr><th>日期</th><th>拍次</th><th class="num">總底價(萬)</th><th class="num">拍定價(萬)</th><th>備註</th></tr>
+      ${h.map(r => `<tr><td>${r.saledate}</td><td>${r.saletype === '5' ? '拍定' : esc(r.salenostr)}</td>
+        <td class="num">${wan(r.min_price)}</td><td class="num">${r.sold_price ? wan(r.sold_price) : '–'}</td><td>${esc(r.rmk)}</td></tr>`).join('')}
+      </table></div>
+    <div><b>標的資訊</b><br>
+      ${lot.addresses.map(esc).join('<br>')}<br>
+      地段：${esc(lot.district)} ${esc(lot.sec)}段 · 建物面積 ${lot.area_m2} ㎡（${ping(lot.area_m2).toFixed(2)} 坪）<br>
+      ${lot.emptyyn ? esc(lot.emptyyn) + ' · ' : ''}通訊投標：${lot.comm_yn === 'Y' ? '可' : '否'} · 首次追蹤 ${lot.first_seen.slice(0, 10)}
+    </div></div>`;
+}
+
+$('thead').addEventListener('click', e => {
+  const th = e.target.closest('th'); if (!th) return;
+  const c = columns().find(c => c.k === th.dataset.k); if (!c || c.sortless) return;
+  if (sortKey === c.k) sortAsc = !sortAsc; else { sortKey = c.k; sortAsc = true; }
+  renderTable();
+});
+$('tbody').addEventListener('click', e => {
+  if (e.target.closest('a')) return;
+  const tr = e.target.closest('tr.row'); if (!tr) return;
+  const k = tr.dataset.key;
+  openRows.has(k) ? openRows.delete(k) : openRows.add(k);
+  renderTable();
+});
+$('tabs').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  tab = b.dataset.tab;
+  [...$('tabs').children].forEach(x => x.classList.toggle('on', x === b));
+  sortKey = 'saledate'; sortAsc = tab === 'active';
+  renderTable();
+});
+['fText', 'fDistrict', 'fSaleno', 'fCheck', 'fRange', 'fMax', 'fNew', 'fStopped'].forEach(id =>
+  $(id).addEventListener(id === 'fText' || id === 'fMax' ? 'input' : 'change', renderTable));
+$('refreshBtn').addEventListener('click', async () => {
+  const b = $('refreshBtn'); b.disabled = true; b.textContent = '更新中…';
+  try {
+    const r = await api('/api/refresh', {method: 'POST'});
+    toast(r.error ? '更新失敗：' + r.error : `更新完成：新增 ${r.new} 件、異動 ${r.changed} 件`);
+    await load();
+  } catch (e) {
+    showError(e.message); toast('更新失敗');
+  } finally { b.disabled = false; b.textContent = '立即更新'; }
+});
+window.addEventListener('resize', () => { clearTimeout(window._rt); window._rt = setTimeout(renderChart, 150); });
+load();
+setInterval(load, 5 * 60 * 1000);
+</script>
+</body>
+</html>
