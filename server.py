@@ -1,4 +1,4 @@
-"""台北法拍屋追蹤 — 本機網頁伺服器。
+"""法拍屋追蹤 — 本機網頁伺服器。
 
 用法:
   python3 server.py                  # http://localhost:8000 ，每 6 小時自動更新
@@ -72,7 +72,10 @@ class Handler(SimpleHTTPRequestHandler):
         url = urlparse(self.path)
         q = parse_qs(url.query)
         if url.path == "/api/lots":
-            data = rows("SELECT * FROM lots ORDER BY saledate DESC")
+            # 只顯示 config.json 設定的縣市；不在設定裡的縣市已停止更新，資料會過時
+            counties = scraper.load_counties()
+            where = f"WHERE county IN ({','.join('?' * len(counties))})" if counties else ""
+            data = rows(f"SELECT * FROM lots {where} ORDER BY saledate DESC", counties)
             for d in data:
                 d["addresses"] = json.loads(d["addresses"] or "[]")
             return self.send_json({
@@ -91,6 +94,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "last_run": last[0] if last else None,
                 "last_success": ok[0] if ok else None,
                 "running": _scrape_lock.locked(),
+                "counties": scraper.load_counties(),
             })
         return super().do_GET()
 
@@ -110,7 +114,7 @@ def main():
     scraper.init_db().close()
     if args.interval > 0:
         threading.Thread(target=scheduler, args=(args.interval,), daemon=True).start()
-    print(f"台北法拍屋追蹤: http://{args.host}:{args.port}")
+    print(f"法拍屋追蹤: http://{args.host}:{args.port}")
     ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
 
 

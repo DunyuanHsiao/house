@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>台北法拍屋追蹤</title>
+<title>法拍屋追蹤</title>
 <style>
 :root {
   color-scheme: light;
@@ -111,8 +111,8 @@ tr.detail td { background: var(--bg); }
 <div class="wrap">
   <header>
     <div>
-      <h1>台北法拍屋追蹤</h1>
-      <div class="sub">資料來源：司法院法拍屋查詢系統（臺北地院、士林地院）· <span id="lastRun">載入中…</span></div>
+      <h1>法拍屋追蹤</h1>
+      <div class="sub">資料來源：司法院法拍屋查詢系統 · 抓取範圍：<span id="scope">–</span>（在 config.json 設定）· <span id="lastRun">載入中…</span></div>
     </div>
     <button class="primary" id="refreshBtn">立即更新</button>
   </header>
@@ -125,7 +125,7 @@ tr.detail td { background: var(--bg); }
   </section>
 
   <section class="card chart-card">
-    <h2>各行政區拍賣中標的數</h2>
+    <h2 id="chartTitle">各縣市拍賣中標的數</h2>
     <div id="chart"><div class="tooltip" id="tip"></div></div>
   </section>
 
@@ -139,9 +139,10 @@ tr.detail td { background: var(--bg); }
     </div>
     <div class="filters">
       <input type="search" id="fText" placeholder="搜尋地址、案號、段名">
+      <label>縣市 <select id="fCounty"><option value="">全部</option></select></label>
       <label>行政區 <select id="fDistrict"><option value="">全部</option></select></label>
       <label>拍次 <select id="fSaleno"><option value="">不限</option><option value="1">第1拍</option><option value="2">第2拍</option><option value="3">第3拍</option><option value="4+">第4拍以上</option></select></label>
-      <label>點交 <select id="fCheck"><option value="">不限</option><option>點交</option><option>不點交</option></select></label>
+      <label>點交 <select id="fCheck"><option value="">不限</option><option>點交</option><option>部份點交</option><option>不點交</option><option>如備註</option></select></label>
       <label>權利 <select id="fRange"><option value="">不限</option><option>全部</option><option>持分</option></select></label>
       <label>底價上限 <input type="number" id="fMax" placeholder="萬元" min="0"></label>
       <label><input type="checkbox" id="fNew"> 只看新上架</label>
@@ -170,8 +171,10 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const wan = n => n == null ? '–' : (n / 1e4).toLocaleString('zh-TW', {maximumFractionDigits: n < 1e6 ? 1 : 0});
 const ping = m2 => m2 * PING;
 const unitPrice = l => (l.rrange === '全部' && l.area_m2 > 0) ? l.min_price / 1e4 / ping(l.area_m2) : null;
-const isNew = l => Date.now() - new Date(l.first_seen) < 7 * DAY;
-const isFirstRun = () => new Set(LOTS.map(l => l.first_seen)).size <= 1;
+// 「新上架」：在該縣市第一次被追蹤之後才出現，且在 7 天內。
+// 第一次抓某縣市時，所有標的都是同一個時間，不算新上架。
+let COUNTY_START = {};
+const isNew = l => l.first_seen > COUNTY_START[l.county] && Date.now() - new Date(l.first_seen) < 7 * DAY;
 
 function toast(msg) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 3000); }
 
@@ -196,24 +199,51 @@ async function load() {
     [d, s] = await Promise.all([api('/api/lots'), api('/api/status')]);
   } catch (e) { showError(e.message); return; }
   $('lastRun').style.color = '';
+  $('scope').textContent = s.counties.length ? s.counties.join('、') : '全國';
   LOTS = d.lots; PDF_URL = d.pdf_url; PIC_URL = d.pic_url;
+  COUNTY_START = {};
+  LOTS.forEach(l => { if (!(l.first_seen >= COUNTY_START[l.county])) COUNTY_START[l.county] = l.first_seen; });
   const ok = s.last_success, last = s.last_run;
   let txt = ok ? `最後更新 ${ok.finished.replace('T', ' ')}` : '尚未更新';
   if (last && last.error) txt += ` · 最近一次更新失敗`;
   if (s.running) txt += ' · 更新中…';
   $('lastRun').textContent = txt;
-  const dists = [...new Set(LOTS.map(l => l.district))].sort();
-  const sel = $('fDistrict'), cur = sel.value;
-  sel.innerHTML = '<option value="">全部</option>' + dists.map(d => `<option>${esc(d)}</option>`).join('');
-  sel.value = cur;
-  renderTiles(); renderChart(); renderTable();
+  fillSelect($('fCounty'), [...new Set(LOTS.map(l => l.county))].sort(byCounty));
+  fillDistricts();
+  renderAll();
+}
+
+// 縣市依北到南排序
+const COUNTY_ORDER = ['基隆市','臺北市','新北市','桃園市','新竹市','新竹縣','苗栗縣','臺中市','彰化縣','南投縣','雲林縣',
+  '嘉義市','嘉義縣','臺南市','高雄市','屏東縣','宜蘭縣','花蓮縣','臺東縣','澎湖縣','金門縣','連江縣'];
+const byCounty = (a, b) => (COUNTY_ORDER.indexOf(a) + 1 || 99) - (COUNTY_ORDER.indexOf(b) + 1 || 99);
+
+function fillSelect(sel, values) {
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">全部</option>' + values.map(v => `<option>${esc(v)}</option>`).join('');
+  sel.value = values.includes(cur) ? cur : '';
+}
+
+function fillDistricts() {
+  const c = $('fCounty').value;
+  const sel = $('fDistrict');
+  sel.disabled = !c;
+  fillSelect(sel, c ? [...new Set(LOTS.filter(l => l.county === c).map(l => l.district))].sort() : []);
+}
+
+function renderAll() { renderTiles(); renderChart(); renderTable(); }
+
+// 依縣市篩選後的標的（統計卡片與圖表使用）
+function scoped() {
+  const c = $('fCounty').value;
+  return c ? LOTS.filter(l => l.county === c) : LOTS;
 }
 
 function renderTiles() {
-  const live = LOTS.filter(l => l.status === 'active' || l.status === 'special');
+  const live = scoped().filter(l => l.status === 'active' || l.status === 'special');
   $('kActive').textContent = live.length.toLocaleString();
   $('kActiveHint').textContent = `一般程序 ${live.filter(l => l.status === 'active').length} · 應買公告 ${live.filter(l => l.status === 'special').length}`;
-  $('kNew').textContent = isFirstRun() ? '–' : live.filter(isNew).length;
+  $('kNew').textContent = live.filter(isNew).length;
   const today = new Date(new Date().toDateString());
   const soon = live.filter(l => { const d = new Date(l.saledate); return d >= today && d - today <= 14 * DAY; });
   $('kSoon').textContent = soon.length;
@@ -223,9 +253,12 @@ function renderTiles() {
 }
 
 function renderChart() {
-  const live = LOTS.filter(l => l.status === 'active' || l.status === 'special');
+  const county = $('fCounty').value;
+  const dim = county ? 'district' : 'county';
+  $('chartTitle').textContent = county ? `${county}各行政區拍賣中標的數` : '各縣市拍賣中標的數';
+  const live = scoped().filter(l => l.status === 'active' || l.status === 'special');
   const counts = {};
-  live.forEach(l => counts[l.district] = (counts[l.district] || 0) + 1);
+  live.forEach(l => counts[l[dim]] = (counts[l[dim]] || 0) + 1);
   const data = Object.entries(counts).sort((a, b) => b[1] - a[1]);
   const box = $('chart');
   box.querySelector('svg')?.remove();
@@ -260,7 +293,10 @@ function renderChart() {
       g.querySelector('path').style.opacity = .8;
     });
     g.addEventListener('mouseleave', () => { tip.style.display = 'none'; g.querySelector('path').style.opacity = 1; });
-    g.addEventListener('click', () => { $('fDistrict').value = g.dataset.name; renderTable(); });
+    g.addEventListener('click', () => {
+      if (dim === 'county') { $('fCounty').value = g.dataset.name; fillDistricts(); renderAll(); }
+      else { $('fDistrict').value = g.dataset.name; renderTable(); }
+    });
   });
 }
 
@@ -272,10 +308,11 @@ const STATUS = {
 function columns() {
   const base = [
     {k: 'saledate', t: {sold: '拍定日', special: '公告日'}[tab] || '拍賣日', nowrap: true, v: l => tab === 'sold' ? (l.sold_date || l.saledate) : l.saledate},
-    {k: 'district', t: '行政區', v: l => l.district},
+    {k: 'district', t: '縣市 / 區', nowrap: true, v: l => l.county + l.district,
+      html: l => `${esc(l.county)}<br><span class="case">${esc(l.district)}</span>`},
     {k: 'addr', t: '地址 / 案號', v: l => l.addresses[0] || '', html: l => {
       const more = l.addresses.length > 1 ? ` <span class="case">等 ${l.addresses.length} 筆</span>` : '';
-      const nb = (!isFirstRun() && isNew(l) && (l.status === 'active' || l.status === 'special')) ? ' <span class="badge b-new">新</span>' : '';
+      const nb = (isNew(l) && (l.status === 'active' || l.status === 'special')) ? ' <span class="badge b-new">新</span>' : '';
       return `<div class="addr">${esc(l.addresses[0] || l.sec + '段')}${more}${nb}</div><div class="case">${esc(l.crtnm.replace('臺灣', ''))} ${esc(l.crm)} ${esc(l.dpt)}股</div>`;
     }},
     {k: 'saleno', t: '拍次', nowrap: true, v: l => l.status === 'special' ? 99 : +l.saleno, html: l => esc(l.salenostr)},
@@ -293,7 +330,7 @@ function columns() {
   base.push(
     {k: 'area', t: '坪數', num: true, v: l => l.area_m2, html: l => ping(l.area_m2).toFixed(1)},
     {k: 'unit', t: '單價(萬/坪)', num: true, v: l => unitPrice(l), html: l => { const u = unitPrice(l); return u == null ? '–' : u.toFixed(1); }},
-    {k: 'checkyn', t: '點交', v: l => l.checkyn, html: l => `<span class="badge ${l.checkyn === '點交' ? 'b-good' : 'b-neutral'}">${esc(l.checkyn)}</span>`},
+    {k: 'checkyn', t: '點交', v: l => l.checkyn, html: l => `<span class="badge ${l.checkyn === '點交' ? 'b-good' : l.checkyn === '部份點交' ? 'b-warn' : 'b-neutral'}">${esc(l.checkyn)}</span>`},
     {k: 'rrange', t: '權利', v: l => l.rrange, html: l => l.rrange === '持分' ? '<span class="badge b-warn">持分</span>' : '全部'},
     {k: 'status', t: '狀態', v: l => l.status, html: l => { const [t, c] = STATUS[l.status] || [l.status, 'b-neutral']; return `<span class="badge ${c}">${t}</span>`; }},
     {k: 'links', t: '連結', sortless: true, html: l => `<span class="links">
@@ -307,13 +344,14 @@ function columns() {
 
 function filtered() {
   const text = $('fText').value.trim().toLowerCase();
-  const dist = $('fDistrict').value, saleno = $('fSaleno').value, chk = $('fCheck').value, rr = $('fRange').value;
+  const county = $('fCounty').value, dist = $('fDistrict').value, saleno = $('fSaleno').value, chk = $('fCheck').value, rr = $('fRange').value;
   const max = parseFloat($('fMax').value), onlyNew = $('fNew').checked, stopped = $('fStopped').checked;
   return LOTS.filter(l => {
     if (tab === 'active' && !(l.status === 'active' || (stopped && l.status === 'stopped'))) return false;
     if (tab === 'special' && l.status !== 'special') return false;
     if (tab === 'sold' && l.status !== 'sold') return false;
     if (tab === 'ended' && l.status !== 'ended' && l.status !== 'stopped') return false;
+    if (county && l.county !== county) return false;
     if (dist && l.district !== dist) return false;
     if (saleno === '4+' && !(+l.saleno >= 4)) return false;
     if (/^\d$/.test(saleno) && (l.saleno !== saleno || l.status === 'special')) return false;
@@ -321,7 +359,7 @@ function filtered() {
     if (rr && l.rrange !== rr) return false;
     if (!isNaN(max) && l.min_price > max * 1e4) return false;
     if (onlyNew && !isNew(l)) return false;
-    if (text && !(l.addresses.join(' ') + l.crm + l.sec + l.district).toLowerCase().includes(text)) return false;
+    if (text && !(l.addresses.join(' ') + l.crm + l.sec + l.county + l.district).toLowerCase().includes(text)) return false;
     return true;
   });
 }
@@ -360,7 +398,7 @@ async function loadHistory(key) {
       </table></div>
     <div><b>標的資訊</b><br>
       ${lot.addresses.map(esc).join('<br>')}<br>
-      地段：${esc(lot.district)} ${esc(lot.sec)}段 · 建物面積 ${lot.area_m2} ㎡（${ping(lot.area_m2).toFixed(2)} 坪）<br>
+      地段：${esc(lot.county)}${esc(lot.district)} ${esc(lot.sec)}段 · 建物面積 ${lot.area_m2} ㎡（${ping(lot.area_m2).toFixed(2)} 坪）<br>
       ${lot.emptyyn ? esc(lot.emptyyn) + ' · ' : ''}通訊投標：${lot.comm_yn === 'Y' ? '可' : '否'} · 首次追蹤 ${lot.first_seen.slice(0, 10)}
     </div></div>`;
 }
@@ -385,6 +423,7 @@ $('tabs').addEventListener('click', e => {
   sortKey = 'saledate'; sortAsc = tab === 'active';
   renderTable();
 });
+$('fCounty').addEventListener('change', () => { fillDistricts(); renderAll(); });
 ['fText', 'fDistrict', 'fSaleno', 'fCheck', 'fRange', 'fMax', 'fNew', 'fStopped'].forEach(id =>
   $(id).addEventListener(id === 'fText' || id === 'fMax' ? 'input' : 'change', renderTable));
 $('refreshBtn').addEventListener('click', async () => {

@@ -1,14 +1,17 @@
-"""台北市法拍屋爬蟲：從司法院「法拍屋查詢系統」抓取資料並寫入 SQLite。
+"""法拍屋爬蟲：從司法院「法拍屋查詢系統」抓取資料並寫入 SQLite。
 
 資料來源: https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02.htm
-抓取三種資料（皆限臺北市、房屋類）:
+抓取三種資料（房屋類）:
   saletype=1 一般程序（進行中的拍賣）
   saletype=4 應買公告（特別程序）
   saletype=5 拍定價格（已拍定結果）
 
 用法:
-  python3 scraper.py            # 抓一次
-  python3 scraper.py --county A # 縣市代碼，A=臺北市
+  python3 scraper.py                     # 抓 config.json 設定的縣市
+  python3 scraper.py --county 臺北市 新北市  # 這次改抓指定縣市（名稱或代碼）
+  python3 scraper.py --all               # 這次抓全國
+
+抓取範圍設定在 config.json 的 "counties"，空陣列 [] 代表全國。
 """
 
 import argparse
@@ -29,18 +32,19 @@ BASE = "https://aomp109.judicial.gov.tw/judbp/wkw"
 PDF_URL = BASE + "/WHD1A02/DO_VIEWPDF.htm?filenm="
 PIC_URL = "https://kpic.judicial.gov.tw/judkp/wkw/WHD1A02_DETAIL.htm?para="
 DB_PATH = Path(__file__).parent / "data" / "houses.db"
+CONFIG_PATH = Path(__file__).parent / "config.json"
 PAGE_SIZE = 200
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
 
 SALETYPES = {"1": "一般程序", "4": "應買公告", "5": "拍定"}
-CHECKYN = {"Y": "點交", "N": "不點交", "M": "如備註"}
+CHECKYN = {"Y": "點交", "N": "不點交", "M": "如備註", "P": "部份點交"}
 SQM_TO_PING = 0.3025
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS lots (
     lot_key      TEXT PRIMARY KEY,
     crtid        TEXT, crtnm TEXT, crm TEXT, dpt TEXT,
-    district     TEXT, sec TEXT,
+    county       TEXT, district TEXT, sec TEXT,
     addresses    TEXT,              -- JSON array
     area_m2      REAL,
     rrange       TEXT,              -- 權利範圍：全部 / 持分
@@ -73,6 +77,9 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS idx_lots_status ON lots(status);
 """
 
+# 舊版資料庫沒有的欄位：(欄位, 型態, 回填值)
+MIGRATIONS = [("county", "TEXT", "臺北市")]
+
 
 class JudicialClient:
     """處理 session cookie、CSRF 與 token；查詢 API 需要 Referer。"""
@@ -98,16 +105,10 @@ class JudicialClient:
         self.csrf = re.search(r'name="_csrf" value="([^"]+)"', html).group(1)
         self.token = re.search(r'name="token" value="([^"]+)"', html).group(1)
 
-    def query(self, county, saletype, page, proptype="C52"):
-        form = {
-            "county": county, "proptype": proptype, "saletype": saletype,
-            "sorted_column": "A.CRMYY, A.CRMID, A.CRMNO, A.SALENO, A.ROWID",
-            "sorted_type": "ASC", "pageNum": page, "pageSize": PAGE_SIZE,
-            "token": self.token, "_csrf": self.csrf,
-        }
+    def _post(self, path, form):
         req = urllib.request.Request(
-            BASE + "/WHD1A02/QUERY.htm",
-            data=urllib.parse.urlencode(form).encode(),
+            BASE + path,
+            data=urllib.parse.urlencode({**form, "_csrf": self.csrf}).encode(),
             headers={
                 "User-Agent": UA,
                 "X-Requested-With": "XMLHttpRequest",
@@ -115,7 +116,20 @@ class JudicialClient:
             },
         )
         with self.opener.open(req, timeout=90) as r:
-            resp = json.loads(r.read().decode("utf-8"))
+            return json.loads(r.read().decode("utf-8"))
+
+    def county_codes(self):
+        """回傳 {縣市名稱: 代碼}，例如 {"臺北市": "A"}"""
+        data = self._post("/WHD1A02/QUERY_COUNTY.htm", {})["data"]
+        return {d["county"]: d["countyno"] for d in data}
+
+    def query(self, county, saletype, page, proptype="C52"):
+        resp = self._post("/WHD1A02/QUERY.htm", {
+            "county": county, "proptype": proptype, "saletype": saletype,
+            "sorted_column": "A.CRMYY, A.CRMID, A.CRMNO, A.SALENO, A.ROWID",
+            "sorted_type": "ASC", "pageNum": page, "pageSize": PAGE_SIZE,
+            "token": self.token,
+        })
         if resp.get("data") is None:
             raise RuntimeError(f"查詢失敗: {resp.get('messageText')}")
         return resp["data"], resp["pageInfo"]["totalNum"]
@@ -129,6 +143,36 @@ class JudicialClient:
                 return rows
             page += 1
             time.sleep(1)  # 對官方網站客氣一點
+
+
+def norm_county(name):
+    return name.strip().replace("台", "臺")
+
+
+def load_counties(path=CONFIG_PATH):
+    """讀取 config.json 的 counties；檔案不存在或空陣列 → [] 代表全國。"""
+    if not path.exists():
+        return []
+    cfg = json.loads(path.read_text(encoding="utf-8"))
+    return [norm_county(c) for c in cfg.get("counties") or []]
+
+
+def resolve_counties(client, counties):
+    """縣市名稱或代碼 → [(代碼, 名稱)]；空清單代表全國。"""
+    if not counties:
+        return [("", "全國")]
+    by_name = client.county_codes()
+    by_code = {v: k for k, v in by_name.items()}
+    targets = []
+    for c in counties:
+        c = norm_county(c)
+        if c in by_name:
+            targets.append((by_name[c], c))
+        elif c in by_code:
+            targets.append((c, by_code[c]))
+        else:
+            raise ValueError(f"不認得的縣市「{c}」，可用的縣市：{'、'.join(by_name)}")
+    return list(dict.fromkeys(targets))  # 去除重複（同時給名稱與代碼時）
 
 
 def roc_to_iso(s):
@@ -173,11 +217,11 @@ def group_lots(rows, saletype):
         lots.append({
             "lot_key": lot_key,
             "crtid": r0["crtid"], "crtnm": r0["crtnm"], "crm": r0["crm"], "dpt": r0["dpt"],
-            "district": r0["ctmd"], "sec": r0["sec"],
+            "county": r0["hsimun"], "district": (r0["ctmd"] or "").strip(), "sec": r0["sec"],
             "addresses": json.dumps(addrs, ensure_ascii=False),
             "area_m2": round(area, 2),
             "rrange": "持分" if partial else "全部",
-            "checkyn": CHECKYN.get(r0["checkyn"], r0["checkyn"]),
+            "checkyn": CHECKYN.get(r0["checkyn"]) or r0.get("checkynstr") or r0["checkyn"],
             "emptyyn": "空屋" if r0.get("emptyyn") == "Y" else "",
             "comm_yn": r0.get("comm_yn"),
             "status": status, "saletype": saletype,
@@ -196,6 +240,12 @@ def init_db(path=DB_PATH):
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(lots)")}
+    for col, typ, fill in MIGRATIONS:
+        if col not in cols:
+            conn.execute(f"ALTER TABLE lots ADD COLUMN {col} {typ}")
+            conn.execute(f"UPDATE lots SET {col}=?", (fill,))
+            conn.commit()
     return conn
 
 
@@ -244,7 +294,10 @@ def upsert(conn, lot, now):
     return new, changed
 
 
-def run(county="A", db_path=DB_PATH, log=print):
+def run(counties=None, db_path=DB_PATH, log=print):
+    """counties: 縣市名稱或代碼清單；None 代表讀 config.json，[] 代表全國。"""
+    if counties is None:
+        counties = load_counties()
     conn = init_db(db_path)
     now = datetime.now().isoformat(timespec="seconds")
     run_id = conn.execute("INSERT INTO runs (started) VALUES (?)", (now,)).lastrowid
@@ -253,10 +306,14 @@ def run(county="A", db_path=DB_PATH, log=print):
     try:
         client = JudicialClient()
         client.init_session()
-        seen = set()
+        targets = resolve_counties(client, counties)
+        log(f"抓取範圍：{'、'.join(name for _, name in targets)}")
+        seen, seen_counties = set(), set()
         # 先處理拍賣中，再處理拍定，讓拍定狀態覆蓋
         for st in ("1", "4", "5"):
-            rows = client.fetch_all(county, st)
+            rows = []
+            for code, _ in targets:
+                rows += client.fetch_all(code, st)
             lots = group_lots(rows, st)
             log(f"[{SALETYPES[st]}] {len(rows)} 筆建物 → {len(lots)} 個標的")
             n_rows += len(rows)
@@ -267,13 +324,16 @@ def run(county="A", db_path=DB_PATH, log=print):
                 n_changed += changed
                 if st != "5":
                     seen.add(lot["lot_key"])
+                    seen_counties.add(lot["county"])
             time.sleep(1)
 
         # 之前在拍賣中、這次沒出現且拍賣日已過 → 結束（未拍定或撤回）
+        # 只處理這次有抓到的縣市，避免只抓單一縣市時把其他縣市誤判為結束
         today = date.today().isoformat()
+        marks = ",".join("?" * len(seen_counties))
         for row in conn.execute(
-                "SELECT lot_key FROM lots WHERE status IN ('active','special','stopped') AND saledate < ?",
-                (today,)).fetchall():
+                f"SELECT lot_key FROM lots WHERE status IN ('active','special','stopped') AND saledate < ?"
+                f" AND county IN ({marks})", (today, *seen_counties)).fetchall() if seen_counties else []:
             if row["lot_key"] not in seen:
                 conn.execute("UPDATE lots SET status='ended', updated_at=? WHERE lot_key=?",
                              (now, row["lot_key"]))
@@ -294,10 +354,12 @@ def run(county="A", db_path=DB_PATH, log=print):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--county", default="A", help="縣市代碼 (A=臺北市)")
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--county", nargs="+", metavar="縣市", help="這次改抓指定縣市（名稱或代碼，可多個）")
+    g.add_argument("--all", action="store_true", help="這次抓全國")
     args = ap.parse_args()
     try:
-        run(args.county)
+        run([] if args.all else args.county)
     except Exception as e:
         print(f"錯誤: {e}", file=sys.stderr)
         sys.exit(1)
