@@ -37,10 +37,10 @@ python3 scraper.py                  # 只抓資料、不開網頁
 
 ## 用 cron 定期更新（可選）
 
-不想一直開著伺服器時，可以用 cron 每 2 小時抓一次：
+不想一直開著伺服器時，可以用 cron 每天抓一次（頻率建議見系統說明文件 9.4 節）：
 
 ```
-0 */2 * * * cd /home/tunyuan/houses && /usr/bin/python3 scraper.py >> data/scrape.log 2>&1
+0 18 * * * cd /home/tunyuan/houses && /usr/bin/python3 scraper.py >> data/scrape.log 2>&1
 ```
 
 ## 文件
